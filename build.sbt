@@ -1,9 +1,11 @@
 val scalaTestVersion = "3.0.0-M7"
+val scalinVersion = "0.11.0.4"
+val shapelessVersion = "2.2.5"
 val spireVersion = "0.11.0"
 
-name := "attributes"
-
 organization := "net.alasc"
+
+name := "attributes"
 
 scalaVersion := "2.11.8"
 
@@ -15,7 +17,8 @@ scalacOptions ++= Seq("-unchecked", "-feature", "-deprecation", "-optimize")
 
 libraryDependencies ++= Seq(
   "org.spire-math" %% "spire" % spireVersion,
-  "org.scalatest" %% "scalatest" % scalaTestVersion % "test"
+  "org.scalatest" %% "scalatest" % scalaTestVersion % "test",
+  "com.chuusai" %% "shapeless" % shapelessVersion % "test"
 )
 
 resolvers ++= Seq(
