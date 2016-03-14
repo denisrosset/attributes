@@ -104,7 +104,7 @@ trait Attributable { self =>
 
   type Tags
 
-  type Self[NewTags] <: Attributable { type Tags = NewTags }
+  type Self[NewTags] = self.type { type Tags = NewTags }
 
   type With[A <: Attr with Singleton] = Self[self.Tags with A#Tag]
 
