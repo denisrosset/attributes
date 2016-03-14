@@ -3,18 +3,66 @@ package polyta
 
 import java.util.concurrent.locks.ReentrantLock
 
-import scala.language.existentials
-import scala.language.higherKinds
+import scala.language.implicitConversions
 import scala.collection.mutable.Map
 
 import spire.util.Opt
+
+final class Evidence[T <: Attributable with Singleton, A <: Attr with Singleton](val ev: AnyRef) extends AnyVal
+
+object Evidence {
+  implicit def evidenceFromType[T <: Attributable with Singleton, A <: Attr with Singleton](implicit ev: T#Tags <:< A#Tag): Evidence[T, A] = new Evidence[T, A](ev)
+  implicit def evidenceFromCompute[T <: Attributable with Singleton, A <: Attr with Singleton](implicit ev: A#Compute[T]): Evidence[T, A] = new Evidence[T, A](ev)
+}
+
+final class AttributableOps[T <: Attributable with Singleton](val t: T) extends AnyVal {
+
+  /** Retrieve from cache or compute from scratch the requested attribute `a`.
+    * 
+    * In all cases, after calling this method, the cache contains 
+    */
+  @inline def apply[V](a: Attr.Aux[V])(implicit evidence: Evidence[T, a.type]): V =
+    if (evidence.ev.isInstanceOf[<:<[_, _]])
+      t._attrApply(a)
+    else
+      t._attrGetOrElseUpdate(a)(evidence.ev.asInstanceOf[a.Compute[T]])
+
+  /** Finds whether the cache contains the attribute `a`, and returns a reference
+    * to this object with updated type tags if the attribute is known.
+    */
+  @inline def get[V](a: Attr.Aux[V]): Opt[V] = t._attrGet(a)
+
+  @inline def add(a: Attr.Aux[_])(implicit compute: a.Compute[T]): T#WithAttr[a.type] = {
+    t._attrGetOrElseUpdate(a)
+    t.asInstanceOf[t.WithAttr[a.type]]
+  }
+
+  /** Retrieves the value of the boolean attribute `a`, and if `a` is true, returns a reference
+    * of `t` tagged with evidence that `a` is true.
+    */
+  @inline def findIf(a: Attr.Bool with Singleton)(implicit evidence: Evidence[T, a.type]): Opt[T#Is[a.type]] =
+    if (apply(a))
+      Opt(t.asInstanceOf[t.Is[a.type]])
+    else
+      Opt.empty[t.Is[a.type]]
+
+  /** Retrieves the value of the boolean attribute `a`, and if `a` is false, returns a reference
+    * of this object tagged with evidence that `a` is false.
+    */
+  @inline def findIfNot(a: Attr.Bool with Singleton)(implicit evidence: Evidence[T, a.type]): Opt[T#IsNot[a.type]] =
+    if (!apply(a))
+      Opt(t.asInstanceOf[t.IsNot[a.type]])
+    else
+      Opt.empty[t.IsNot[a.type]]
+
+}
 
 /** Base trait for objects that contain cached attributes. Attributes are properties that are
   * difficult to compute, and/or for which the computation needs external resources or algorithms.
   * 
   * The attribute `a: Attr` can be retrieved in a typesafe manner from an object `t: T` in two cases:
   * 
-  * - an implicit instance of `Attr.Compute[a.type, T] ` is available,
+  * - an implicit instance of `a.Compute[T] ` is available,
   * - there is evidence that `t.Tags <:< a.Tag`.
   * 
   * The attribute cache is never cleaned, so that it can be used in a typesafe manner.
@@ -22,14 +70,12 @@ import spire.util.Opt
   */
 trait Attributable { self =>
 
+  def attr: AttributableOps[self.type] = new AttributableOps[self.type](self)
+
   protected val _attrLock = new ReentrantLock()
   protected var _attrDict: Map[String, Any] = Map.empty[String, Any]
 
-  /** Retrieve from cache or compute from scratch the requested attribute `a`.
-    * 
-    * In all cases, after calling this method, the cache contains 
-    */
-  def computeAttr[V](a: Attr.Aux[V])(implicit compute: Attr.Compute[self.type, a.type]): V = {
+  def _attrGetOrElseUpdate[V](a: Attr.Aux[V])(implicit compute: a.Compute[self.type]): V = {
     _attrLock.lock()
     try {
       if (_attrDict.isDefinedAt(a.name))
@@ -44,38 +90,28 @@ trait Attributable { self =>
     }
   }
 
-  /** Finds whether the cache contains the attribute `a`, and returns a reference 
-    * to this object with updated type tags if the attribute is known.
-    */
-  def findAttr(a: Attr): Opt[With[a.type]] = {
+  def _attrGet[V](a: Attr.Aux[V]): Opt[V] = {
     _attrLock.lock()
     try {
       if (_attrDict.isDefinedAt(a.name))
-        Opt(self.asInstanceOf[With[a.type]])
+        Opt(_attrDict(a.name).asInstanceOf[V])
       else
-        Opt.empty[With[a.type]]
+        Opt.empty[V]
     } finally {
-      _attrLock.unlock()
+      _attrLock.lock()
     }
   }
 
-  /** Forces the computation of the attribute `a`, and returns a reference to this object
-    * with updated type tags. */
-  def withAttr(a: Attr)(implicit compute: Attr.Compute[self.type, a.type]): With[a.type] = {
+  def _attrIsDefined(a: Attr): Boolean = {
     _attrLock.lock()
     try {
-      // force computation
-      if (!_attrDict.isDefinedAt(a.name))
-        _attrDict.put(a.name, compute(self))
-      self.asInstanceOf[With[a.type]]
+      _attrDict.isDefinedAt(a.name)
     } finally {
       _attrLock.unlock()
     }
   }
 
-  /** Retrieves the value of the attribute `a` when there is evidence that the cache
-    * contains the attribute. */
-  def attr[V](a: Attr.Aux[V])(implicit ev: Tags <:< a.Tag): V = {
+  def _attrApply[V](a: Attr.Aux[V]): V = {
     _attrLock.lock()
     try {
       _attrDict(a.name).asInstanceOf[V]
@@ -84,33 +120,15 @@ trait Attributable { self =>
     }
   }
 
-  /** Retrieves the value of the boolean attribute `a`, and if `a` is true, returns a reference
-    * of this object tagged with evidence that `a` is true.
-    */
-  def findIfAttr(a: Attr.Aux[Boolean])(implicit compute: Attr.Compute[self.type, a.type]): Opt[Is[a.type]] =
-    if (computeAttr(a))
-      Opt(self.asInstanceOf[Is[a.type]])
-    else
-      Opt.empty[Is[a.type]]
-
-  /** Retrieves the value of the boolean attribute `a`, and if `a` is false, returns a reference
-    * of this object tagged with evidence that `a` is false.
-    */
-  def findIfNotAttr(a: Attr.Aux[Boolean])(implicit compute: Attr.Compute[self.type, a.type]): Opt[IsNot[a.type]] =
-    if (!computeAttr(a))
-      Opt(self.asInstanceOf[IsNot[a.type]])
-    else
-      Opt.empty[IsNot[a.type]]
-
   type Tags
 
-  type Self[NewTags] = self.type { type Tags = NewTags }
+  type WithTags[NewTags] = self.type { type Tags = NewTags }
 
-  type With[A <: Attr with Singleton] = Self[self.Tags with A#Tag]
+  type WithAttr[A <: Attr with Singleton] = self.type { type Tags = self.Tags with A#Tag }
 
-  type Is[A <: Attr.Aux[Boolean] with Singleton] = Self[self.Tags with A#IsTag]
+  type Is[A <: Attr.Bool with Singleton] = self.type { type Tags = self.Tags with A#IsTag }
 
-  type IsNot[A <: Attr.Aux[Boolean] with Singleton] = Self[self.Tags with A#IsNotTag]
+  type IsNot[A <: Attr.Bool with Singleton] = self.type { type Tags = self.Tags with A#IsNotTag }
 
 }
 
@@ -121,14 +139,17 @@ sealed trait Attr { self =>
   type V
 
   trait Tag
-  trait IsTag <: Tag
-  trait IsNotTag <: Tag
 
-  def apply[T <: Attributable](f: T => V): Attr.Compute[T, self.type] = new Attr.Compute[T, self.type] {
-    def apply(t: T): V = f(t)
+  trait Compute[-T <: Attributable] {
+    def apply(t: T): V
+  }
+
+  def apply[T <: Attributable](f: T => V) = new Compute[T] {
+    def apply(t: T) = f(t)
   }
 
 }
+
 
 object Attr {
 
@@ -139,15 +160,10 @@ object Attr {
     type V = V0
   }
 
-  trait Compute[-T <: Attributable, A <: Attr with Singleton] {
-
-    def apply(t: T): A#V
-
+  case class Bool(val name: String) extends Attr {
+    type V = Boolean
+    trait IsTag <: Tag
+    trait IsNotTag <: Tag
   }
-
-  def combine[T <: Attributable](x: T, y: T): x.Self[x.Tags with y.Tags] = {
-    require(x eq y)
-    x.asInstanceOf[x.Self[x.Tags with y.Tags]]
-  }    
 
 }
