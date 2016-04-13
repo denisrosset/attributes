@@ -36,4 +36,4 @@ publishArtifact in Test := false
 
 bintrayReleaseOnPublish in ThisBuild := false
 
-bintrayRepository := "net.alasc"
+bintrayRepository := "maven"
