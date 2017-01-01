@@ -1,19 +1,10 @@
 package net.alasc.attributes
 
-import spire.algebra.EuclideanRing
-import spire.math.SafeLong
-import spire.math.prime
-
 import org.scalatest.FunSuite
 
-case class Num(i: SafeLong) extends Attributable {
+case class Num(i: BigInt) extends Attributable {
 
-  def isPrime: Boolean = attr(Num.attrs.isPrime)( prime.isPrime(i) )
-  def factors: prime.Factors = attr(Num.attrs.factors)( prime.factor(i) )
-  def phi: SafeLong = attr(Num.attrs.phi) {
-    val f = factors
-    f.factors.foldLeft(SafeLong(1)) { case (acc, (prime, power)) => acc * prime.pow(power - 1) * (prime - 1) }
-  }
+  def isPrime: Boolean = Num.attributes.isPrime(this)( i.isProbablePrime(100) )
 
 }
 
@@ -21,10 +12,8 @@ object Num {
 
   // Num attributes
 
-  object attrs extends Attributes("Num") {
-    object factors extends Attribute.OfValue[prime.Factors]("factors") // Prime factors decomposition
+  object attributes extends Attributes("Num") {
     object isPrime extends Attribute.Property("isPrime") // Primality
-    object phi extends Attribute.OfValue[SafeLong]("phi") // Euler phi function
   }
 
 }
@@ -32,34 +21,57 @@ object Num {
 class Test extends FunSuite {
 
   test("Example for Num") {
-    val n = Num(SafeLong(123))
-    val eleven = Num(SafeLong(11))
+    val n = Num(BigInt(123))
+    val eleven = Num(BigInt(11))
     assert(!n.isPrime)
     assert(eleven.isPrime)
-    n.factors
-    eleven.factors
-    assert(n.attr.isDefined(Num.attrs.factors))
-    assert(n.attr.isDefined(Num.attrs.isPrime))
-    n.attr(Num.attrs.factors)(sys.error("This path is not taken, as macro inlines a branch"))
+    assert(Num.attributes.isPrime.isDefined(n))
+    Num.attributes.isPrime(n)(sys.error("This path is not taken, as macro inlines a branch"))
   }
 
-  test("Example for SeqEuclideanRing") {
-    import spire.implicits._
-    val seq = SeqEuclideanRing(Seq(10,25,30,40))
-    assert(seq.gcd == 5)
+  test("Example for SeqGCD") {
+    val seq1 = SeqGCD(Seq(10,25,30,40))
+    val seq2 = SeqGCD(Seq(BigInt(10),BigInt(25),BigInt(30),BigInt(40)))
+    assert(seq1.gcd == 5)
+    assert(seq2.gcd == BigInt(5))
   }
 
 }
 
-case class SeqEuclideanRing[A:EuclideanRing](seq: Seq[A]) extends Attributable {
-  def gcd: A = attr(SeqEuclideanRing.attrs.gcd)( seq.foldLeft(EuclideanRing[A].zero)(EuclideanRing[A].gcd) )
+/** Barebones type class for a subset of Euclidean ring operations. */
+trait GCD[A] {
+  def zero: A
+  def one: A
+  def gcd(x: A, y: A): A
 }
 
-object SeqEuclideanRing {
+object GCD {
 
-  object attrs extends Attributes("SeqEuclideanRing") {
+  def apply[A](implicit ev: GCD[A]): GCD[A] = ev
+
+  implicit val bigInt: GCD[BigInt] = new GCD[BigInt] {
+    val zero: BigInt = BigInt(0)
+    val one: BigInt = BigInt(1)
+    def gcd(x: BigInt, y: BigInt): BigInt = x.gcd(y)
+  }
+
+  implicit val int: GCD[Int] = new GCD[Int] {
+    def zero: Int = 0
+    def one: Int = 1
+    def gcd(x: Int, y: Int): Int = BigInt(x).gcd(BigInt(y)).toInt // easy hack
+  }
+
+}
+
+case class SeqGCD[A:GCD](seq: Seq[A]) extends Attributable {
+  def gcd: A = SeqGCD.attrs.gcd(this)( seq.foldLeft(GCD[A].zero)(GCD[A].gcd) )
+}
+
+object SeqGCD {
+
+  object attrs extends Attributes("SeqGCD") {
     object gcd extends Attribute("gcd") {
-      implicit def forSER[A]: For[SeqEuclideanRing[A], A] = For
+      implicit def forSER[A]: For[SeqGCD[A], A] = For
     }
   }
 
