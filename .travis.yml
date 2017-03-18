@@ -5,7 +5,7 @@ scala:
   - 2.11.8
 
 jdk:
-  - oraclejdk6
+  - oraclejdk7
 
 matrix:
   include:
